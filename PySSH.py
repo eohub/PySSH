@@ -1,15 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-Inn'SSH Manager
----------------
-Gestionnaire de connexions SSH pour Windows :
-  - lit / écrit nativement ~/.ssh/config (commentaires et options inconnues préservés,
-    sauvegarde automatique config.innssh.bak, support de "Include")
-  - groupes, favoris, couleurs, notes, noms d'affichage, glisser-déposer
-  - terminal NATIF Windows (console conhost) intégré dans des onglets de l'application,
-
-Dépendances : pip install customtkinter pillow
-"""
 import ctypes
 import glob
 import json
@@ -52,11 +40,10 @@ REMOTE_DEPLOY_CMD = ("mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && "
                      "chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys")
 GROUP_SEPARATOR = "\x1f"
 
-# ----- Thème ------------------------------------------------------------------ #
 BG, SIDE, PANEL = "#101316", "#15191e", "#191e25"
 CARD, HOVER, BORDER = "#20262e", "#2a323d", "#303944"
 TEXT, MUTED = "#edf1f4", "#98a3ad"
-ACCENT, ACCENT_H = "#00d9ff", "#00d9ff"
+ACCENT = "#00d9ff"
 DANGER, DANGER_H = "#3a1d24", "#5a2530"
 SELECT_BG, TERM_BG = "#21443a", "#0c0c0c"
 
@@ -72,7 +59,7 @@ def font(size=12, weight="normal"):
 
 
 def btn_primary(parent, text, command, **kw):
-    opts = dict(fg_color=ACCENT, hover_color=ACCENT_H, text_color="white",
+    opts = dict(fg_color=ACCENT, hover_color=ACCENT, text_color="white",
                 corner_radius=8, height=38, font=font(13, "bold"))
     opts.update(kw)
     return ctk.CTkButton(parent, text=text, command=command, **opts)
@@ -88,12 +75,9 @@ def btn_ghost(parent, text, command, **kw):
 def make_entry(parent, **kw):
     opts = dict(fg_color="#171c26", border_color=BORDER, border_width=1,
                 corner_radius=8, height=34, text_color=TEXT, font=font(12))
-    opts.update(kw)  # les valeurs passées par l'appelant remplacent les défauts
+    opts.update(kw)
     return ctk.CTkEntry(parent, **opts)
 
-# --------------------------------------------------------------------------- #
-# Utilitaires
-# --------------------------------------------------------------------------- #
 def resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
@@ -124,9 +108,6 @@ def bat_quote(s):
     s = s.replace("%", "%%")
     return f'"{s}"' if re.search(r'[\s&|<>^()"]', s) else s
 
-# --------------------------------------------------------------------------- #
-# Modèle : fichier ~/.ssh/config
-# --------------------------------------------------------------------------- #
 HEADER_RE = re.compile(r"^\s*(host|match)\s+(.+?)\s*$", re.I)
 KV_RE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9]*)(?:\s*=\s*|\s+)(.*?)\s*$")
 INCLUDE_RE = re.compile(r"^\s*include\s+(.+?)\s*$", re.I)
@@ -134,11 +115,11 @@ INCLUDE_RE = re.compile(r"^\s*include\s+(.+?)\s*$", re.I)
 
 class HostBlock:
     def __init__(self, kind, header, patterns, cfile):
-        self.kind = kind            # "Host" ou "Match"
-        self.header = header        # ligne brute d'en-tête
+        self.kind = kind
+        self.header = header
         self.patterns = patterns
-        self.lead = []              # commentaires juste au-dessus de l'en-tête
-        self.body = []              # lignes brutes du bloc
+        self.lead = []
+        self.body = []
         self.file = cfile
 
     @property
@@ -216,7 +197,7 @@ class ConfigFile:
         if self.path.exists() and str(self.path) not in ConfigFile._backed_up:
             shutil.copy2(self.path, self.path.with_name(self.path.name + ".innssh.bak"))
             ConfigFile._backed_up.add(str(self.path))
-        self.path.write_bytes(text.encode("utf-8"))  # écriture en place : ACL conservées
+        self.path.write_bytes(text.encode("utf-8"))
 
 
 class SSHConfig:
@@ -283,9 +264,6 @@ class SSHConfig:
                 out.append((str(f.path), 0))
         return tuple(out)
 
-# --------------------------------------------------------------------------- #
-# Métadonnées de l'application (groupes, noms d'affichage, couleurs...)
-# --------------------------------------------------------------------------- #
 class Store:
     def __init__(self):
         self.data = {"groups": [], "hosts": {}}
@@ -372,9 +350,6 @@ class Store:
             messagebox.showerror(APP_NAME, f"Impossible d'enregistrer les réglages :\n{e}")
 
 
-# --------------------------------------------------------------------------- #
-# Console Windows native intégrée (conhost re-parenté dans un frame Tk)
-# --------------------------------------------------------------------------- #
 class PROCESSENTRY32W(ctypes.Structure):
     _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
                 ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
@@ -461,7 +436,7 @@ WS_EX_STRIP = 0x00040000 | 0x00000100 | 0x00000200
 SWP_NOZORDER, SWP_NOACTIVATE, SWP_FRAMECHANGED, SWP_SHOWWINDOW = 0x4, 0x10, 0x20, 0x40
 WM_CLOSE, WM_SYSCOMMAND = 0x0010, 0x0112
 SMTO_ABORTIFHUNG = 0x0002
-ID_CONSOLE_COPY, ID_CONSOLE_PASTE = 0xFFF0, 0xFFF1   # commandes du menu « Modifier » de conhost
+ID_CONSOLE_COPY, ID_CONSOLE_PASTE = 0xFFF0, 0xFFF1
 ENABLE_QUICK_EDIT_MODE, ENABLE_EXTENDED_FLAGS = 0x0040, 0x0080
 SW_HIDE, SW_SHOW = 0, 5
 TERMINAL_INSET, TERMINAL_CORNER = 12, 18
@@ -503,7 +478,6 @@ class EmbeddedConsole:
         self._deadline = 0
         self._on_fail = None
 
-    # -- démarrage -------------------------------------------------------- #
     def _write_script(self):
         head = ["@echo off", "chcp 65001 >nul", f"title {self.token}"]
         if self.pause_on_success:
@@ -524,8 +498,7 @@ class EmbeddedConsole:
         self._write_script()
         si = subprocess.STARTUPINFO()
         si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        si.wShowWindow = 0  # SW_HIDE : on ré-affiche la fenêtre une fois intégrée
-        # conhost.exe force la console classique (même si Windows Terminal est le terminal par défaut)
+        si.wShowWindow = 0
         self.proc = subprocess.Popen(f'conhost.exe cmd.exe /c ""{self.script}""',
                                      startupinfo=si, creationflags=subprocess.CREATE_NEW_CONSOLE)
         self._deadline = time.time() + 10
@@ -603,7 +576,6 @@ class EmbeddedConsole:
         user32.SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & ~WS_EX_STRIP) & 0x7FFFFFFF)
         user32.SetParent(hwnd, self.host.winfo_id())
         self.hwnd = hwnd
-        # partage de la file d'entrée pour que le clavier fonctionne dans la console
         self._tid = user32.GetWindowThreadProcessId(hwnd, None)
         user32.AttachThreadInput(kernel32.GetCurrentThreadId(), self._tid, True)
         self.host.bind("<Configure>", self._on_resize, add="+")
@@ -612,12 +584,9 @@ class EmbeddedConsole:
         self.set_visible(visible)
         if visible:
             self.focus()
-        # ssh peut modifier le mode de la console au démarrage : on réactive QuickEdit
-        # (sélection souris + clic droit copier/coller) plusieurs fois au début de session
         for delay in (700, 2000, 5000):
             self.host.after(delay, self.ensure_quickedit)
 
-    # -- interaction ------------------------------------------------------ #
     def _on_resize(self, _event=None):
         if self.closed:
             return
@@ -731,9 +700,6 @@ class EmbeddedConsole:
         except OSError:
             pass
 
-# --------------------------------------------------------------------------- #
-# Fenêtre : création / modification d'une connexion
-# --------------------------------------------------------------------------- #
 class HostDialog(ctk.CTkToplevel):
     NO_GROUP = "(Sans groupe)"
 
@@ -894,9 +860,6 @@ class HostDialog(ctk.CTkToplevel):
         else:
             self.destroy()
 
-# --------------------------------------------------------------------------- #
-# Application principale
-# --------------------------------------------------------------------------- #
 class App(ctk.CTk):
     HOME_TAB = "Accueil"
     FAV = "fav"
@@ -939,7 +902,6 @@ class App(ctk.CTk):
             self.after(50, self._pointer_poll)
         self.after(2500, self._poll_config)
 
-    # ------------------------------------------------------------------ UI -- #
     def _dot(self, hexv):
         hexv = hexv or DEFAULT_DOT
         if hexv not in self._dots:
@@ -975,7 +937,6 @@ class App(ctk.CTk):
         ctk.CTkLabel(side, text="SESSIONS", font=font(9, "bold"), text_color=MUTED).pack(
             anchor="w", padx=18, pady=(0, 4))
 
-        # --- arbre ------------------------------------------------------------
         style = ttk.Style()
         style.theme_use("clam")
         normal_row = Image.new("RGBA", (100, 36), (0, 0, 0, 0))
@@ -1004,7 +965,6 @@ class App(ctk.CTk):
         self.tree.pack(side="left", fill="both", expand=True)
         self.tree.tag_configure("group", font=("Segoe UI", 10, "bold"), foreground=ACCENT)
 
-        # --- carte détail -----------------------------------------------------
         card = ctk.CTkFrame(side, fg_color=CARD, corner_radius=10, border_width=1, border_color=BORDER)
         card.pack(fill="x", padx=14, pady=(0, 16))
         self.d_title = ctk.CTkLabel(card, text="Aucune sélection", font=font(14, "bold"), text_color=TEXT,
@@ -1070,7 +1030,6 @@ class App(ctk.CTk):
             self._close_tab(name)
         return "break"
 
-    # --------------------------------------------------------------- accueil -- #
     def _build_home(self):
         f = self.home
         for w in f.winfo_children():
@@ -1107,7 +1066,6 @@ class App(ctk.CTk):
                               command=lambda a=b.alias: self.connect(a)).grid(
                     row=i // 3, column=i % 3, padx=(0, 10), pady=(0, 10), sticky="ew")
 
-    # --------------------------------------------------------- arbre / data -- #
     def _matches(self, b, q):
         if not q:
             return True
@@ -1262,7 +1220,6 @@ class App(ctk.CTk):
         finally:
             self.after(2500, self._poll_config)
 
-    # ---------------------------------------------------------- actions hôtes -- #
     def new_host(self, group=""):
         HostDialog(self, None, group)
 
@@ -1373,7 +1330,6 @@ class App(ctk.CTk):
             line = f'type "{pub.replace("%", "%%")}" | ssh {bat_quote(alias)} "{REMOTE_DEPLOY_CMD}"'
             self.open_script_tab(f"Clé → {self.store.label(alias)}", [line], pause_on_success=True)
 
-    # ------------------------------------------------------------- groupes -- #
     def new_group(self, then_move=None, parent_group=""):
         title = "Nouveau sous-groupe" if parent_group else "Nouveau groupe"
         name = ctk.CTkInputDialog(text="Nom du nouveau groupe :", title=title).get_input()
@@ -1451,7 +1407,6 @@ class App(ctk.CTk):
         self.closed_groups = {moved.get(path, path) for path in self.closed_groups}
         self._after_change()
 
-    # --------------------------------------------------- menu contextuel / DnD -- #
     def _menu(self):
         return tk.Menu(self, tearoff=0, bg=CARD, fg=TEXT, activebackground=ACCENT, activeforeground="white",
                        bd=0, relief="flat", font=("Segoe UI", 10))
@@ -1625,13 +1580,13 @@ class App(ctk.CTk):
     def _dnd_release(self, e):
         d, self._drag = self._drag, None
         self.tree.configure(cursor="")
-        if not d:                      # 2e clic d'un double-clic : déjà géré
+        if not d:
             return
         if d["on"]:
             tgt = self.tree.identify_row(e.y)
             if tgt and tgt != d["iid"]:
                 self._drop(d["iid"], tgt)
-        elif d["iid"] in self._gtext:  # simple clic sur un groupe : plier / déplier
+        elif d["iid"] in self._gtext:
             self._toggle_group(d["iid"])
 
     def _drop(self, src, tgt):
@@ -1681,7 +1636,6 @@ class App(ctk.CTk):
                 "cmd", ['cd /d "%USERPROFILE%"', "cmd /k"])),
         ])
 
-    # ----------------------------------------------------------- terminaux -- #
     def connect(self, alias):
         self.open_script_tab(self.store.label(alias), [f"ssh {bat_quote(alias)}"])
 
