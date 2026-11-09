@@ -15,7 +15,7 @@ import uuid
 import tkinter as tk
 from ctypes import wintypes
 from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import filedialog, messagebox, ttk
 from urllib.parse import quote
 
 import customtkinter as ctk
@@ -705,6 +705,46 @@ class EmbeddedConsole:
             pass
 
 
+class InputDialog(ctk.CTkToplevel):
+    def __init__(self, parent, title, text, initial="", show=""):
+        super().__init__(parent)
+        self.configure(fg_color=BG)
+        self.title(title)
+        self.geometry("440x190")
+        self.resizable(False, False)
+        self.transient(parent)
+        self.result = None
+        ctk.CTkLabel(self, text=text, font=font(13), text_color=TEXT, anchor="w", justify="left",
+                     wraplength=390).pack(fill="x", padx=26, pady=(22, 8))
+        self.entry = make_entry(self, show=show)
+        self.entry.pack(fill="x", padx=26)
+        self.entry.insert(0, initial)
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.pack(fill="x", padx=26, pady=(18, 18))
+        btn_primary(bar, "OK", self._ok, width=110).pack(side="right")
+        btn_ghost(bar, "Annuler", self.destroy, width=100, height=38).pack(side="right", padx=(0, 8))
+        self.bind("<Return>", lambda e: self._ok())
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.after(200, self._grab)
+
+    def _grab(self):
+        try:
+            self.grab_set()
+            self.entry.focus_set()
+        except Exception:
+            pass
+
+    def _ok(self):
+        self.result = self.entry.get()
+        self.destroy()
+
+
+def ask_text(parent, title, text, initial="", show=""):
+    dialog = InputDialog(parent, title, text, initial, show)
+    dialog.wait_window()
+    return dialog.result
+
+
 class SftpPanel(ctk.CTkFrame):
     def __init__(self, parent, app, alias, token):
         super().__init__(parent, width=480, fg_color=SIDE, corner_radius=12,
@@ -812,8 +852,7 @@ class SftpPanel(ctk.CTkFrame):
         def done(r, e):
             self.connecting = False
             if isinstance(e, paramiko.AuthenticationException):
-                pw = simpledialog.askstring(APP_NAME, f"Mot de passe ou phrase secrète pour « {self.alias} » :",
-                                            show="*", parent=self.app)
+                pw = ask_text(self.app, APP_NAME, f"Mot de passe ou phrase secrète pour « {self.alias} » :", show="*")
                 if pw is None:
                     return self._status("Authentification annulée.")
                 self.password = pw
@@ -906,7 +945,7 @@ class SftpPanel(ctk.CTkFrame):
             self._run(lambda: self.sftp.get(remote, local), f"« {name} » téléchargé.")
 
     def mkdir(self):
-        name = simpledialog.askstring(APP_NAME, "Nom du nouveau dossier :", parent=self.app)
+        name = ask_text(self.app, "Nouveau dossier", "Nom du nouveau dossier :")
         if name:
             remote = posixpath.join(self.path, name)
             self._run(lambda: self.sftp.mkdir(remote))
@@ -915,7 +954,7 @@ class SftpPanel(ctk.CTkFrame):
         name = self._selected()
         if not name:
             return
-        new = simpledialog.askstring(APP_NAME, "Nouveau nom :", initialvalue=name, parent=self.app)
+        new = ask_text(self.app, "Renommer", "Nouveau nom :", name)
         if new and new != name:
             old_path, new_path = posixpath.join(self.path, name), posixpath.join(self.path, new)
             self._run(lambda: self.sftp.rename(old_path, new_path))
