@@ -691,7 +691,7 @@ class EmbeddedConsole:
                 try:
                     self.proc.wait(timeout=0.5)
                 except subprocess.TimeoutExpired:
-                    subprocess.run(["taskkill", "/PID", str(self.proc.pid), "/T", "/F"],
+                    subprocess.run(["taskkill", "/PID", str(self.proc.pid), "/T", "/F"], stdin=subprocess.DEVNULL,
                                    capture_output=True, creationflags=CREATE_NO_WINDOW, timeout=3)
             if self.hwnd and user32.IsWindow(self.hwnd):
                 user32.ShowWindow(self.hwnd, SW_HIDE)
@@ -823,7 +823,7 @@ class SftpPanel(ctk.CTkFrame):
 
     def _connect_work(self):
         out = subprocess.run(["ssh", "-G", self.alias], capture_output=True, text=True,
-                             creationflags=CREATE_NO_WINDOW).stdout
+                             stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW).stdout
         info, keys = {}, []
         for line in out.splitlines():
             key, _, value = line.partition(" ")
