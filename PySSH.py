@@ -2,20 +2,24 @@ import ctypes
 import glob
 import json
 import os
+import posixpath
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import uuid
 import tkinter as tk
 from ctypes import wintypes
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from urllib.parse import quote
 
 import customtkinter as ctk
+import paramiko
 from PIL import Image, ImageDraw, ImageTk
 
 ctk.set_appearance_mode("Dark")
@@ -700,6 +704,246 @@ class EmbeddedConsole:
         except OSError:
             pass
 
+
+class SftpPanel(ctk.CTkFrame):
+    def __init__(self, parent, app, alias, token):
+        super().__init__(parent, width=480, fg_color=SIDE, corner_radius=12,
+                         border_width=1, border_color=BORDER)
+        self.pack_propagate(False)
+        self.app, self.alias, self.token = app, alias, token
+        self.client = self.sftp = self.password = None
+        self.connecting = False
+        self.path = "/"
+        self.entries = {}
+
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.pack(fill="x", padx=10, pady=(10, 6))
+        btn_ghost(bar, "↑", self.go_up, width=34).pack(side="left")
+        btn_ghost(bar, "⟳", lambda: self.navigate(self.path), width=34).pack(side="left", padx=(6, 0))
+        btn_ghost(bar, "⌖", self.sync_terminal_dir, width=34).pack(side="left", padx=(6, 8))
+        self.e_path = make_entry(bar)
+        self.e_path.pack(side="left", fill="x", expand=True)
+        self.e_path.bind("<Return>", lambda e: self.navigate(self.e_path.get().strip()))
+
+        tf = tk.Frame(self, bg=SIDE, highlightthickness=0)
+        tf.pack(fill="both", expand=True, padx=(10, 6))
+        self.tree = ttk.Treeview(tf, style="Ssh.Treeview", show="tree", columns=("size", "date"),
+                                 selectmode="browse")
+        sb = ctk.CTkScrollbar(tf, command=self.tree.yview, fg_color="transparent",
+                              button_color=BORDER, button_hover_color=HOVER, width=10)
+        self.tree.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
+        self.tree.column("#0", width=210)
+        self.tree.column("size", width=70, anchor="e", stretch=False)
+        self.tree.column("date", width=120, anchor="e", stretch=False)
+        self.tree.bind("<Double-1>", self._on_double)
+
+        actions = ctk.CTkFrame(self, fg_color="transparent")
+        actions.pack(fill="x", padx=10, pady=(6, 0))
+        for text, command in (("Envoyer", self.upload), ("Télécharger", self.download),
+                              ("Dossier", self.mkdir), ("Renommer", self.rename),
+                              ("Supprimer", self.delete)):
+            btn_ghost(actions, text, command, width=60, height=30, font=font(11)).pack(
+                side="left", fill="x", expand=True, padx=2)
+
+        self.lbl = ctk.CTkLabel(self, text="", anchor="w", font=font(11), text_color=MUTED, wraplength=450)
+        self.lbl.pack(fill="x", padx=12, pady=(6, 10))
+
+    @staticmethod
+    def _size(n):
+        for unit in ("o", "Ko", "Mo", "Go"):
+            if n < 1024:
+                return f"{n:.0f} {unit}"
+            n /= 1024
+        return f"{n:.1f} To"
+
+    def _status(self, text):
+        self.lbl.configure(text=text)
+
+    def _async(self, work, done):
+        box = {}
+
+        def run():
+            try:
+                box["r"] = work()
+            except Exception as e:
+                box["e"] = e
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+
+        def poll():
+            if thread.is_alive():
+                self.after(40, poll)
+            elif self.winfo_exists():
+                done(box.get("r"), box.get("e"))
+
+        poll()
+
+    def _connect_work(self):
+        out = subprocess.run(["ssh", "-G", self.alias], capture_output=True, text=True,
+                             creationflags=CREATE_NO_WINDOW).stdout
+        info, keys = {}, []
+        for line in out.splitlines():
+            key, _, value = line.partition(" ")
+            if key == "identityfile":
+                keys.append(os.path.expanduser(value))
+            else:
+                info.setdefault(key, value)
+        host, port = info["hostname"], int(info.get("port", 22))
+        jump = info.get("proxyjump", "none")
+        sock = None if jump == "none" else paramiko.ProxyCommand(f"ssh -W {host}:{port} {jump}")
+        client = paramiko.SSHClient()
+        client.load_system_host_keys()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        client.connect(host, port, info.get("user"), password=self.password, passphrase=self.password,
+                       key_filename=[k for k in keys if os.path.isfile(k)] or None, sock=sock, timeout=15)
+        return client, client.open_sftp()
+
+    def _ensure(self, then):
+        if self.sftp:
+            return then()
+        if self.connecting:
+            return
+        self.connecting = True
+        self._status("Connexion…")
+
+        def done(r, e):
+            self.connecting = False
+            if isinstance(e, paramiko.AuthenticationException):
+                pw = simpledialog.askstring(APP_NAME, f"Mot de passe ou phrase secrète pour « {self.alias} » :",
+                                            show="*", parent=self.app)
+                if pw is None:
+                    return self._status("Authentification annulée.")
+                self.password = pw
+                return self._ensure(then)
+            if e:
+                return self._status(f"Connexion impossible : {e}")
+            self.client, self.sftp = r
+            then()
+
+        self._async(self._connect_work, done)
+
+    def _terminal_dir(self):
+        try:
+            _, out, _ = self.client.exec_command(
+                f"sh -c 'readlink /proc/$(cat /tmp/.pyssh_{self.token})/cwd'", timeout=10)
+            return out.read().decode().strip()
+        except Exception:
+            return ""
+
+    def sync_terminal_dir(self):
+        self.navigate()
+
+    def go_up(self):
+        self.navigate(posixpath.dirname(self.path.rstrip("/")) or "/")
+
+    def navigate(self, path=None):
+        def work():
+            target = self.sftp.normalize(path or self._terminal_dir() or ".")
+            return target, self.sftp.listdir_attr(target)
+
+        def done(r, e):
+            if e:
+                return self._status(f"Erreur : {e}")
+            self.path, items = r
+            self.e_path.delete(0, "end")
+            self.e_path.insert(0, self.path)
+            self.tree.delete(*self.tree.get_children())
+            self.entries = {a.filename: a for a in items}
+            for a in sorted(items, key=lambda a: (not stat.S_ISDIR(a.st_mode), a.filename.lower())):
+                is_dir = stat.S_ISDIR(a.st_mode)
+                icon = "📁" if is_dir else "🔗" if stat.S_ISLNK(a.st_mode) else "📄"
+                self.tree.insert("", "end", iid=a.filename, text=f"  {icon}  {a.filename}",
+                                 values=("" if is_dir else self._size(a.st_size or 0),
+                                         time.strftime("%Y-%m-%d %H:%M", time.localtime(a.st_mtime or 0))))
+            self._status(f"{len(items)} élément(s)")
+
+        self._ensure(lambda: self._async(work, done))
+
+    def _run(self, work, message=None):
+        self._status("En cours…")
+
+        def done(_, e):
+            if e:
+                return self._status(f"Erreur : {e}")
+            if message is None:
+                self.navigate(self.path)
+            else:
+                self._status(message)
+
+        self._async(work, done)
+
+    def _selected(self):
+        selection = self.tree.selection()
+        return selection[0] if selection else None
+
+    def _on_double(self, e):
+        name = self.tree.identify_row(e.y)
+        if name and stat.S_ISDIR(self.entries[name].st_mode) or name and stat.S_ISLNK(self.entries[name].st_mode):
+            self.navigate(posixpath.join(self.path, name))
+
+    def upload(self):
+        files = filedialog.askopenfilenames(parent=self.app, title="Choisir les fichiers à envoyer")
+        if not files:
+            return
+        path = self.path
+
+        def work():
+            for f in files:
+                self.sftp.put(f, posixpath.join(path, os.path.basename(f)))
+
+        self._run(work)
+
+    def download(self):
+        name = self._selected()
+        if not name or stat.S_ISDIR(self.entries[name].st_mode):
+            return self._status("Sélectionnez un fichier à télécharger.")
+        local = filedialog.asksaveasfilename(parent=self.app, initialfile=name)
+        if local:
+            remote = posixpath.join(self.path, name)
+            self._run(lambda: self.sftp.get(remote, local), f"« {name} » téléchargé.")
+
+    def mkdir(self):
+        name = simpledialog.askstring(APP_NAME, "Nom du nouveau dossier :", parent=self.app)
+        if name:
+            remote = posixpath.join(self.path, name)
+            self._run(lambda: self.sftp.mkdir(remote))
+
+    def rename(self):
+        name = self._selected()
+        if not name:
+            return
+        new = simpledialog.askstring(APP_NAME, "Nouveau nom :", initialvalue=name, parent=self.app)
+        if new and new != name:
+            old_path, new_path = posixpath.join(self.path, name), posixpath.join(self.path, new)
+            self._run(lambda: self.sftp.rename(old_path, new_path))
+
+    def delete(self):
+        name = self._selected()
+        if not name or not messagebox.askyesno(APP_NAME, f"Supprimer « {name} » ?", parent=self.app):
+            return
+        remote = posixpath.join(self.path, name)
+        is_dir = stat.S_ISDIR(self.entries[name].st_mode)
+        self._run(lambda: self.sftp.rmdir(remote) if is_dir else self.sftp.remove(remote))
+
+    def close(self):
+        client, token = self.client, self.token
+        self.client = self.sftp = None
+        if not client:
+            return
+
+        def work():
+            try:
+                client.exec_command(f"rm -f /tmp/.pyssh_{token}")[1].channel.recv_exit_status()
+            except Exception:
+                pass
+            finally:
+                client.close()
+
+        threading.Thread(target=work, daemon=True).start()
+
 class HostDialog(ctk.CTkToplevel):
     NO_GROUP = "(Sans groupe)"
 
@@ -880,6 +1124,8 @@ class App(ctk.CTk):
         self.cfg = SSHConfig()
         self._stamp = self.cfg.stamp()
         self.sessions = {}
+        self.remotes = {}
+        self.sftp_panels = {}
         self._active_dropdown = None
         self._active_submenu = None
         self._active_submenu_anchor = None
@@ -1003,6 +1249,7 @@ class App(ctk.CTk):
         self.btn_term.pack(side="left")
         btn_ghost(top, "Fermer l'onglet", self.close_current_tab, fg_color=DANGER, hover_color=DANGER_H,
                   border_color="#ad1212").pack(side="right")
+        btn_ghost(top, "Explorateur SFTP", self.toggle_sftp).pack(side="right", padx=(0, 8))
 
         self.tabs = ctk.CTkTabview(
             main, anchor="nw", command=self._on_tab_change, fg_color=PANEL, corner_radius=12,
@@ -1637,13 +1884,16 @@ class App(ctk.CTk):
         ])
 
     def connect(self, alias):
-        self.open_script_tab(self.store.label(alias), [f"ssh {bat_quote(alias)}"])
+        token = uuid.uuid4().hex[:10]
+        line = (f"ssh -t {bat_quote(alias)} "
+                f"\"exec sh -c 'echo $$ > /tmp/.pyssh_{token}; exec ${{SHELL:-sh}} -l'\"")
+        self.open_script_tab(self.store.label(alias), [line], alias=alias, token=token)
 
     def connect_external(self, alias):
         if IS_WIN:
             subprocess.Popen(f'start "{self.store.label(alias)}" ssh {bat_quote(alias)}', shell=True)
 
-    def open_script_tab(self, title, lines, pause_on_success=False):
+    def open_script_tab(self, title, lines, pause_on_success=False, alias=None, token=None):
         if not IS_WIN:
             return messagebox.showerror(APP_NAME, "Le terminal intégré n'est disponible que sous Windows.")
         name, n = title, 2
@@ -1657,11 +1907,26 @@ class App(ctk.CTk):
         self.update_idletasks()
         console = EmbeddedConsole(host, lines, pause_on_success)
         self.sessions[name] = console
+        if alias:
+            self.remotes[name] = (alias, token)
         try:
             console.start(on_fail=lambda msg, n=name: self._session_failed(n, msg))
         except Exception as ex:
             self._close_tab(name)
             messagebox.showerror(APP_NAME, f"Impossible de lancer la console :\n{ex}")
+
+    def toggle_sftp(self):
+        name = self.tabs.get()
+        if name not in self.remotes:
+            return messagebox.showinfo(APP_NAME, "L'explorateur SFTP est disponible dans un onglet de connexion SSH.")
+        panel = self.sftp_panels.get(name)
+        if panel is None:
+            alias, token = self.remotes[name]
+            panel = self.sftp_panels[name] = SftpPanel(self.tabs.tab(name), self, alias, token)
+        elif panel.winfo_ismapped():
+            return panel.pack_forget()
+        panel.pack(side="right", fill="y", padx=(10, 0), before=self.sessions[name].host)
+        panel.sync_terminal_dir()
 
     def _session_failed(self, name, msg):
         self._close_tab(name)
@@ -1678,6 +1943,10 @@ class App(ctk.CTk):
             if remaining_tabs:
                 target = remaining_tabs[max(0, tab_names.index(name) - 1)]
 
+        self.remotes.pop(name, None)
+        panel = self.sftp_panels.pop(name, None)
+        if panel:
+            panel.close()
         c = self.sessions.pop(name, None)
         if c:
             c.close()
