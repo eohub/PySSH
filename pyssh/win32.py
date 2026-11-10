@@ -1,4 +1,8 @@
-"""Accès bas niveau à l'API Windows (ctypes) : fenêtres, consoles et processus."""
+"""Accès bas niveau à l'API Windows (ctypes) : fenêtres, consoles et processus.
+
+Sur les autres plateformes, `user32`, `kernel32` et `gdi32` valent None : ce module reste
+importable, mais aucune fonction ne doit être appelée.
+"""
 from __future__ import annotations
 
 import contextlib
@@ -29,7 +33,6 @@ SHARE_READ_WRITE = 3
 ATTACH_PARENT_PROCESS = 0xFFFFFFFF
 INVALID_HANDLE = ctypes.c_void_p(-1).value
 TH32CS_SNAPPROCESS = 0x2
-WINDOW_BUFFER_SIZE_EVENT = 0x0004
 
 
 # --------------------------------------------------------------------------- #
@@ -62,21 +65,6 @@ class CONSOLE_FONT_INFOEX(ctypes.Structure):
     _fields_ = [("cbSize", wintypes.ULONG), ("nFont", wintypes.DWORD),
                 ("dwFontSize", COORD), ("FontFamily", wintypes.UINT),
                 ("FontWeight", wintypes.UINT), ("FaceName", wintypes.WCHAR * 32)]
-
-
-class _WindowBufferSizeRecord(ctypes.Structure):
-    _fields_ = [("dwSize", COORD)]
-
-
-class _InputEventUnion(ctypes.Union):
-    # `_padding` impose la taille (16 octets) et l'alignement (4) de KEY_EVENT_RECORD,
-    # la plus grande variante de la union Windows.
-    _fields_ = [("WindowBufferSizeEvent", _WindowBufferSizeRecord),
-                ("_padding", wintypes.DWORD * 4)]
-
-
-class INPUT_RECORD(ctypes.Structure):
-    _fields_ = [("EventType", wintypes.WORD), ("Event", _InputEventUnion)]
 
 
 # --------------------------------------------------------------------------- #
@@ -143,9 +131,6 @@ def _configure_prototypes() -> None:
     k.SetCurrentConsoleFontEx.restype = wintypes.BOOL
     k.GetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
     k.SetConsoleMode.argtypes = [ctypes.c_void_p, wintypes.DWORD]
-    k.WriteConsoleInputW.argtypes = [ctypes.c_void_p, ctypes.POINTER(INPUT_RECORD),
-                                     wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
-    k.WriteConsoleInputW.restype = wintypes.BOOL
     k.CloseHandle.argtypes = [ctypes.c_void_p]
     k.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
     k.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
@@ -215,17 +200,3 @@ def console_handles(pids: Sequence[int], *devices: str) -> Iterator[Optional[lis
         kernel32.FreeConsole()
         if had_console:
             kernel32.AttachConsole(ATTACH_PARENT_PROCESS)
-
-
-def send_resize_event(input_handle: int, cols: int, rows: int) -> bool:
-    """Injecte un WINDOW_BUFFER_SIZE_EVENT dans l'entrée de la console.
-
-    ssh.exe ne relit la taille de la console (et ne prévient le serveur via
-    « window-change » / SIGWINCH) que lorsqu'il reçoit cet évènement. Or Windows ne
-    le génère pas quand seule la *fenêtre* change et que le *tampon* garde sa taille.
-    """
-    record = INPUT_RECORD()
-    record.EventType = WINDOW_BUFFER_SIZE_EVENT
-    record.Event.WindowBufferSizeEvent.dwSize = COORD(cols, rows)
-    written = wintypes.DWORD()
-    return bool(kernel32.WriteConsoleInputW(input_handle, ctypes.byref(record), 1, ctypes.byref(written)))

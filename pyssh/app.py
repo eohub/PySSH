@@ -410,6 +410,7 @@ class App(ctk.CTk):
         self._build_home()
 
     def _poll_config(self) -> None:
+        """Recharge la configuration si un fichier ssh a été modifié depuis l'extérieur."""
         try:
             if self.cfg.stamp() != self._stamp:
                 self.cfg.load()
@@ -436,6 +437,7 @@ class App(ctk.CTk):
             self.edit_host(alias)
 
     def save_host(self, block, data: dict) -> Optional[str]:
+        """Valide et enregistre une connexion. Retourne un message d'erreur, ou None."""
         alias = data["alias"]
         if not re.fullmatch(r"[\w.@:+\-]+", alias):
             return "Alias invalide (lettres, chiffres, . _ - @ : + uniquement, sans espace ni joker)."

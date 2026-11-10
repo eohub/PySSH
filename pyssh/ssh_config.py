@@ -1,3 +1,4 @@
+"""Lecture / écriture non destructive de ~/.ssh/config (et de ses `Include`)."""
 from __future__ import annotations
 
 import glob
@@ -16,12 +17,13 @@ MAX_INCLUDE_DEPTH = 5
 
 
 class HostBlock:
+    """Un bloc `Host ...` ou `Match ...` avec ses commentaires et ses lignes."""
 
     def __init__(self, kind: str, header: str, patterns: list[str], cfile: "ConfigFile"):
         self.kind = kind
         self.header = header
         self.patterns = patterns
-        self.lead: list[str] = []   
+        self.lead: list[str] = []   # commentaires placés juste avant l'en-tête
         self.body: list[str] = []
         self.file = cfile
 
@@ -31,10 +33,12 @@ class HostBlock:
 
     @property
     def is_real(self) -> bool:
+        """Vrai pour un `Host` concret (sans joker `*`, `?` ou `!`)."""
         return (self.kind == "Host" and bool(self.patterns)
                 and not any(c in p for p in self.patterns for c in "*?!"))
 
     def split_body(self) -> tuple[dict[str, str], list[str]]:
+        """Sépare les options principales (éditées via l'UI) des lignes avancées."""
         main: dict[str, str] = {}
         adv: list[str] = []
         for line in self.body:
@@ -58,6 +62,8 @@ class HostBlock:
 
 
 class ConfigFile:
+    """Un fichier de configuration SSH découpé en préambule + blocs."""
+
     _backed_up: set[str] = set()
 
     def __init__(self, path):
@@ -106,6 +112,8 @@ class ConfigFile:
 
 
 class SSHConfig:
+    """Ensemble du fichier config principal et des fichiers inclus."""
+
     def __init__(self):
         self.files: list[ConfigFile] = []
         self.load()
@@ -161,6 +169,7 @@ class SSHConfig:
         block.file.save()
 
     def stamp(self) -> tuple:
+        """Empreinte (chemin, mtime) des fichiers, pour détecter les modifications externes."""
         out = []
         for cfile in self.files:
             try:

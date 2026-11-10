@@ -17,16 +17,27 @@ from .win32 import (
     SMALL_RECT, SMTO_ABORTIFHUNG, SM_CXVSCROLL, SW_HIDE, SW_SHOW, SWP_FRAMECHANGED,
     SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, WM_CLOSE, WM_SYSCOMMAND, WNDENUMPROC,
     WS_CHILD, WS_EX_STRIP, WS_STRIP, WS_VISIBLE, console_handles, descendant_pids,
-    gdi32, kernel32, send_resize_event, user32,
+    gdi32, kernel32, user32,
 )
 
 TERMINAL_INSET, TERMINAL_CORNER = 12, 18
 FIT_DELAY_MS, FIT_ATTEMPTS = 80, 6
 ATTACH_TIMEOUT_S = 10
 CONSOLE_FONT_NAME = "Cascadia Mono"
+CONSOLE_FONT_HEIGHT = 20
+FALLBACK_CELL_RATIO = 0.45  # largeur/hauteur approximative d'une cellule monospace
+
+
+def _debug(message: str) -> None:
+    """Journal optionnel : définir PYSSH_DEBUG=1 pour écrire %TEMP%\\pyssh_fit.log."""
+    if os.environ.get("PYSSH_DEBUG"):
+        with open(os.path.join(tempfile.gettempdir(), "pyssh_fit.log"), "a", encoding="utf-8") as f:
+            f.write(message + "\n")
 
 
 class EmbeddedConsole:
+    """Lance un script .cmd dans un conhost et ré-attache sa fenêtre à `host`."""
+
     def __init__(self, host, lines: list[str], pause_on_success: bool = False):
         self.host = host
         self.lines = lines
@@ -119,7 +130,7 @@ class EmbeddedConsole:
                 info.FaceName = CONSOLE_FONT_NAME
                 info.FontFamily = 0x31
                 info.FontWeight = 400
-                info.dwFontSize = COORD(10, 20)
+                info.dwFontSize = COORD(0, CONSOLE_FONT_HEIGHT)  # largeur 0 = laissée à conhost
                 kernel32.SetCurrentConsoleFontEx(handle, False, ctypes.byref(info))
 
     def _embed(self, hwnd: int) -> None:
@@ -173,6 +184,13 @@ class EmbeddedConsole:
         self._fit_job = self.host.after(FIT_DELAY_MS, lambda: self._fit_console(attempt))
 
     def _fit_console(self, attempt: int = 0) -> None:
+        """Ajuste la console (colonnes/lignes) à l'espace disponible.
+
+        On part de la taille de cellule annoncée par conhost, puis on mesure la fenêtre
+        console réelle pour corriger l'écart. La police est demandée avec une largeur 0
+        (voir `_set_console_font`) pour que conhost utilise la même largeur de cellule
+        pour dessiner et pour calculer le nombre de colonnes.
+        """
         self._fit_job = None
         if self.closed or not self.hwnd or not user32.IsWindow(self.hwnd) or not self.proc:
             return
@@ -183,18 +201,18 @@ class EmbeddedConsole:
         avail_w, avail_h = host_w - 2 * inset, host_h - 2 * inset
         if attempt == 0 and not user32.MoveWindow(self.hwnd, inset, inset, avail_w, avail_h, True):
             return
-        rect = wintypes.RECT()
-        if not user32.GetWindowRect(self.hwnd, ctypes.byref(rect)):
-            return
 
         settled = False
         pids = descendant_pids(self.proc.pid)[::-1]
-        with console_handles(pids, "CONOUT$", "CONIN$") as handles:
+        with console_handles(pids, "CONOUT$") as handles:
             if handles:
-                out_handle, in_handle = handles
-                settled = self._fit_step(out_handle, attempt, avail_w, avail_h,
+                rect = wintypes.RECT()
+                if not user32.GetWindowRect(self.hwnd, ctypes.byref(rect)):
+                    return
+                settled = self._fit_step(handles[0], attempt, avail_w, avail_h,
                                          rect.right - rect.left, rect.bottom - rect.top)
-                self._notify_resize(out_handle, in_handle)
+                _debug(f"attempt={attempt} host={host_w}x{host_h} avail={avail_w}x{avail_h} "
+                       f"win={rect.right - rect.left}x{rect.bottom - rect.top} settled={settled}")
         if not settled and attempt < FIT_ATTEMPTS:
             self._schedule_fit(attempt + 1)
 
@@ -208,8 +226,10 @@ class EmbeddedConsole:
                 not kernel32.GetCurrentConsoleFontEx(handle, False, ctypes.byref(cell)):
             return False
         cell_w, cell_h = cell.dwFontSize.X, cell.dwFontSize.Y
-        if cell_w <= 0 or cell_h <= 0:
+        if cell_h <= 0:
             return False
+        if cell_w <= 0:
+            cell_w = max(1, round(cell_h * FALLBACK_CELL_RATIO))
 
         cols = info.srWindow.Right - info.srWindow.Left + 1
         rows = info.srWindow.Bottom - info.srWindow.Top + 1
@@ -220,6 +240,7 @@ class EmbeddedConsole:
             new_cols = cols + (avail_w - win_w) // cell_w
             new_rows = rows + (avail_h - win_h) // cell_h
         new_cols, new_rows = max(1, new_cols), max(1, new_rows)
+        _debug(f"  cols={cols} rows={rows} cell={cell_w}x{cell_h} -> new={new_cols}x{new_rows}")
         if (new_cols, new_rows) == (cols, rows):
             return attempt >= 2
 
@@ -233,15 +254,6 @@ class EmbeddedConsole:
         if size.X > new_cols and info.dwCursorPosition.X < new_cols:
             kernel32.SetConsoleScreenBufferSize(handle, COORD(new_cols, size.Y))
         return False
-
-    @staticmethod
-    def _notify_resize(out_handle, in_handle) -> None:
-        info = CONSOLE_SCREEN_BUFFER_INFO()
-        if not kernel32.GetConsoleScreenBufferInfo(out_handle, ctypes.byref(info)):
-            return
-        cols = info.srWindow.Right - info.srWindow.Left + 1
-        rows = info.srWindow.Bottom - info.srWindow.Top + 1
-        send_resize_event(in_handle, cols, rows)
 
     # ------------------------------------------------------------------ #
     # Focus / visibilité / presse-papiers

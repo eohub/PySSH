@@ -16,7 +16,7 @@ def main() -> None:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
         except Exception:
             pass
-    from .app import App 
+    from .app import App  # import tardif : le thème doit être défini avant la création des widgets
     App().mainloop()
 
 

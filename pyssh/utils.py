@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 def resource_path(relative_path: str) -> str:
+    """Chemin d'une ressource, compatible PyInstaller (`sys._MEIPASS`)."""
     base_path = getattr(sys, "_MEIPASS", None) or str(Path(__file__).resolve().parent.parent)
     return os.path.join(base_path, relative_path)
 
